@@ -1,50 +1,50 @@
 ## Brunata Home Assistant Integration
 
-Diese Repository enthält eine **Home Assistant Custom Integration** für das Brunata Nutzerportal.
+This repository contains a **Home Assistant custom integration** for the Brunata user portal.
 
 ### Installation
 
 #### Home Assistant OS / Supervised
 
-- Kopiere den Ordner `custom_components/brunata/` nach:
+- Copy the folder `custom_components/brunata/` to:
   - `/config/custom_components/brunata/`
-- Starte Home Assistant neu.
-- Öffne **Einstellungen → Geräte & Dienste → Integration hinzufügen → Brunata**.
+- Restart Home Assistant.
+- Open **Settings → Devices & Services → Add Integration → Brunata**.
 
 #### Home Assistant Core (venv)
 
-- Kopiere den Ordner `custom_components/brunata/` in dein HA-Konfigurationsverzeichnis:
+- Copy the folder `custom_components/brunata/` into your HA config directory:
   - `<config>/custom_components/brunata/`
-- Starte Home Assistant neu.
+- Restart Home Assistant.
 
 ### Installation via HACS (Custom Repository)
 
-- Füge das Repository als **Custom repository** in HACS hinzu (Typ: **Integration**):
+- Add the repository as a **Custom repository** in HACS (type: **Integration**):
   - `https://github.com/fjfricke/brunata`
-- Installiere anschließend **Brunata** und starte Home Assistant neu.
+- Then install **Brunata** and restart Home Assistant.
 
-### Anmeldung / Konfiguration
+### Login / Configuration
 
-Du brauchst Zugangsdaten, die im Brunata-Portal funktionieren.
-Im Config-Flow kannst du u. a. **Base URL**, **SAP Client** und **Sprache** setzen (standardmäßig passend für das Münchner Portal).
+You need portal credentials that work with the Brunata portal.
+In the config flow you can set **Base URL**, **SAP client**, and **language** (defaults fit the Munich portal).
 
-Über die Optionen kannst du das Aktualisierungsintervall ändern.
+You can change the update interval via the options flow.
 
 ### Sensoren (Entities)
 
-- Pro `CostType` (z. B. `HZ01`, `HZ02`, `WW01` …) werden eigene Sensoren erzeugt:
-  - **Monatsverbrauch (kWh)** (`sensor.*monthly_<cost_type>`)
-  - **Zählerstand (Meter)** (`sensor.*meter_<cost_type>`, Einheit z. B. *Einh.* oder *m³*)
-  - **Verbrauch (kumulativ, kWh)** (`sensor.*kwh_total_<cost_type>`, `total_increasing`)
-- **Dashboard-Perioden** (Diagnose)
+- For each `CostType` (e.g. `HZ01`, `HZ02`, `WW01` …) separate sensors are created:
+  - **Monthly consumption (kWh)** (`sensor.*monthly_<cost_type>`)
+  - **Meter reading** (`sensor.*meter_<cost_type>`, unit e.g. *Einh.* or *m³*)
+  - **Cumulative consumption (kWh)** (`sensor.*kwh_total_<cost_type>`, `total_increasing`)
+- **Dashboard periods** (diagnostic)
 
-### Historie / Recorder (wichtig)
+### History / Recorder (important)
 
-- Die **kWh kumulativ** Sensoren werden zusätzlich als **Long-term statistics** in den Recorder geschrieben.
-- Die kumulative kWh-Historie wird aus den Monatswerten als kumulative Summe aufgebaut und importiert.
+- The **cumulative kWh** sensors are also written as **long-term statistics** into the recorder.
+- The cumulative kWh history is built as a cumulative sum from the monthly values and imported.
 
-### Sicherheit & Datenschutz
+### Security & Privacy
 
-- Diese Integration nutzt deine Portal-Zugangsdaten, um Daten aus dem Brunata-Portal abzurufen.
-- Teile Logs/Dumps nur anonymisiert, da sie personenbezogene Daten enthalten können.
+- This integration uses your portal credentials to fetch data from the Brunata portal.
+- Only share logs/dumps in anonymized form, as they may contain personal data.
 
