@@ -1,0 +1,13 @@
+{
+  "domain": "brunata",
+  "name": "Brunata",
+  "codeowners": ["@fjfricke"],
+  "config_flow": true,
+  "documentation": "https://github.com/fjfricke/brunata-api",
+  "issue_tracker": "https://github.com/fjfricke/brunata-api/issues",
+  "iot_class": "cloud_polling",
+  "requirements": ["brunata-api @ git+https://github.com/fjfricke/brunata-api.git@v0.1.2"],
+  "version": "0.1.2",
+  "loggers": ["brunata_api"]
+}
+

@@ -1,0 +1,37 @@
+{
+  "title": "Brunata",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Brunata",
+        "description": "Enter your Brunata portal credentials.",
+        "data": {
+          "base_url": "Base URL",
+          "username": "Username",
+          "password": "Password",
+          "sap_client": "SAP client",
+          "sap_language": "SAP language"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Brunata.",
+      "invalid_auth": "Invalid authentication.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This Brunata account is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Brunata options",
+        "data": {
+          "scan_interval": "Update interval"
+        }
+      }
+    }
+  }
+}
+
