@@ -3,11 +3,11 @@
   "name": "Brunata",
   "codeowners": ["@fjfricke"],
   "config_flow": true,
-  "documentation": "https://github.com/fjfricke/brunata-api",
-  "issue_tracker": "https://github.com/fjfricke/brunata-api/issues",
+  "documentation": "https://github.com/fjfricke/brunata",
+  "issue_tracker": "https://github.com/fjfricke/brunata/issues",
   "iot_class": "cloud_polling",
-  "requirements": ["brunata-api @ git+https://github.com/fjfricke/brunata-api.git@v0.1.2"],
-  "version": "0.1.2",
+  "requirements": ["brunata-api @ git+https://github.com/fjfricke/brunata-api.git@v0.1.3"],
+  "version": "0.1.3",
   "loggers": ["brunata_api"]
 }
 

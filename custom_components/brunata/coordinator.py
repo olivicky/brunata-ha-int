@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from datetime import UTC, datetime
 from datetime import timedelta
 import logging
 from typing import Any
 
 from brunata_api import BrunataClient, ReadingKind
 from brunata_api.errors import LoginError
-from brunata_api.models import CurrentConsumption, MeterReading, Reading
+from brunata_api.models import MeterReading, Reading
 import httpx
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
@@ -26,69 +24,40 @@ from .statistics_import import import_series_as_sum
 
 _LOGGER = logging.getLogger(__name__)
 
-@dataclass(frozen=True)
-class _KwhHistory:
-    current: MeterReading
-    history: list[MeterReading]
-    monthly_kwh: list[Reading]
+
+def _kind_from_cost_type(cost_type: str) -> ReadingKind:
+    if cost_type.startswith("HZ"):
+        return ReadingKind.heating
+    if cost_type.startswith("WW"):
+        return ReadingKind.hot_water
+    # Fallback: heating
+    return ReadingKind.heating
 
 
-def _is_kwh_unit(unit: str | None) -> bool:
-    if not unit:
-        return False
-    return "kwh" in unit.lower()
-
-
-def _backcalculate_kwh_history(
-    *,
-    current: MeterReading,  # unit must be kWh
-    monthly: list[Reading],
-) -> list[MeterReading]:
-    """Back-calculate cumulative kWh readings from monthly kWh consumption."""
-    if not monthly:
-        return [current]
-
+def _cumulative_kwh_history(
+    *, cost_type: str, monthly: list[Reading]
+) -> tuple[ReadingKind, str | None, list[MeterReading]]:
+    """Build a cumulative (sum) kWh series from monthly kWh readings."""
+    kind = _kind_from_cost_type(cost_type)
     monthly_sorted = sorted(monthly, key=lambda r: r.timestamp)
-    current_value = float(current.value)
+    unit = monthly_sorted[-1].unit if monthly_sorted else "kWh"
+    unit = unit or "kWh"
 
-    out_rev: list[MeterReading] = []
-    # Only use monthly points up to the current timestamp (active period).
-    monthly_upto = [m for m in monthly_sorted if m.timestamp <= current.timestamp]
-    for m in reversed(monthly_upto):
-        before = current_value
-        out_rev.append(
+    total = 0.0
+    history: list[MeterReading] = []
+    for r in monthly_sorted:
+        total += float(r.value)
+        history.append(
             MeterReading(
-                timestamp=m.timestamp,
-                value=round(current_value, 6),
-                unit=current.unit,
-                cost_type=current.cost_type,
-                kind=current.kind,
+                timestamp=r.timestamp,
+                value=round(total, 6),
+                unit=unit,
+                cost_type=cost_type,
+                kind=kind,
             )
         )
 
-        current_value -= float(m.value)
-        if current_value < -1e-6:
-            _LOGGER.warning(
-                "Back-calculated kWh reading went negative for cost_type=%s at %s "
-                "(unit=%s). Stopping backfill. before=%s, subtract=%s, after=%s, api_current=%s",
-                current.cost_type,
-                m.timestamp.isoformat(),
-                current.unit,
-                round(before, 6),
-                m.value,
-                round(current_value, 6),
-                current.value,
-            )
-            break
-
-    out_rev.append(current)
-    uniq: dict[datetime, MeterReading] = {}
-    for r in out_rev:
-        ts = r.timestamp
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=UTC)
-        uniq[ts] = r
-    return sorted(uniq.values(), key=lambda r: r.timestamp)
+    return kind, unit, history
 
 
 class BrunataDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -151,72 +120,45 @@ class BrunataDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             dashboard_dates_task = client.get_dashboard_dates()
             meter_readings_task = client.get_meter_readings()
-            current_heating_task = client.get_current_consumption(ReadingKind.heating)
-            current_hot_water_task = client.get_current_consumption(ReadingKind.hot_water)
+            monthly_heating_task = client.get_monthly_consumptions(ReadingKind.heating, in_kwh=True)
+            monthly_hot_water_task = client.get_monthly_consumptions(ReadingKind.hot_water, in_kwh=True)
 
             (
                 dashboard_dates,
-                meter_readings,
-                current_heating,
-                current_hot_water,
+                meter_readings_by_cost_type,
+                monthly_heating_by_cost_type,
+                monthly_hot_water_by_cost_type,
             ) = await asyncio.gather(
                 dashboard_dates_task,
                 meter_readings_task,
-                current_heating_task,
-                current_hot_water_task,
+                monthly_heating_task,
+                monthly_hot_water_task,
             )
 
-            # Monthly consumption series depends on the discovered cost types.
-            monthly_heating = await client.get_monthly_consumption(
-                cost_type=current_heating.cost_type, in_kwh=True
-            )
-            monthly_hot_water = await client.get_monthly_consumption(
-                cost_type=current_hot_water.cost_type, in_kwh=True
-            )
+            monthly_by_cost_type: dict[str, list[Reading]] = {}
+            monthly_by_cost_type.update(monthly_heating_by_cost_type or {})
+            monthly_by_cost_type.update(monthly_hot_water_by_cost_type or {})
 
             data: dict[str, Any] = {
                 "account": account,
-                # Keep the existing keys for backwards-compatibility with entity ids.
-                "monthly_hz01": monthly_heating,
-                "monthly_ww01": monthly_hot_water,
                 "dashboard_dates": dashboard_dates,
-                "meter_readings": meter_readings,
-                "current_heating": current_heating,
-                "current_hot_water": current_hot_water,
+                # New multi-cost-type model
+                "meter_readings_by_cost_type": meter_readings_by_cost_type or {},
+                "monthly_by_cost_type": monthly_by_cost_type,
             }
 
-            # Build a synthetic "kWh meter" (total_increasing) from brunata current (kWh)
-            # and back-calculate earlier cumulative points from monthly kWh.
-            kwh_meter_readings: list[MeterReading] = [
-                MeterReading(
-                    timestamp=current_heating.as_of,
-                    value=float(current_heating.value),
-                    unit=current_heating.unit,
-                    cost_type=current_heating.cost_type,
-                    kind=current_heating.kind,
-                ),
-                MeterReading(
-                    timestamp=current_hot_water.as_of,
-                    value=float(current_hot_water.value),
-                    unit=current_hot_water.unit,
-                    cost_type=current_hot_water.cost_type,
-                    kind=current_hot_water.kind,
-                ),
-            ]
-            data["kwh_meter_readings"] = kwh_meter_readings
-
-            kwh_histories: dict[str, _KwhHistory] = {}
-            for km in kwh_meter_readings:
-                if not _is_kwh_unit(km.unit):
+            kwh_histories_by_cost_type: dict[str, list[MeterReading]] = {}
+            kwh_totals_by_cost_type: dict[str, MeterReading] = {}
+            for cost_type, monthly in monthly_by_cost_type.items():
+                if not monthly:
                     continue
-                monthly_for_kwh = (
-                    monthly_heating if km.kind == ReadingKind.heating else monthly_hot_water
-                )
-                history = _backcalculate_kwh_history(current=km, monthly=monthly_for_kwh)
-                kwh_histories[km.cost_type] = _KwhHistory(
-                    current=km, history=history, monthly_kwh=monthly_for_kwh
-                )
-            data["kwh_histories"] = kwh_histories
+                _kind, _unit, history = _cumulative_kwh_history(cost_type=cost_type, monthly=monthly)
+                if not history:
+                    continue
+                kwh_histories_by_cost_type[cost_type] = history
+                kwh_totals_by_cost_type[cost_type] = history[-1]
+            data["kwh_histories_by_cost_type"] = kwh_histories_by_cost_type
+            data["kwh_totals_by_cost_type"] = kwh_totals_by_cost_type
 
             uid = self.entry.unique_id or self.entry.entry_id
 
@@ -241,14 +183,16 @@ class BrunataDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     _LOGGER.debug("Failed to clear obsolete statistics: %s", err)
 
             # Backfill ONLY the synthetic cumulative kWh series (not the physical meters).
-            for cost_type, kh in kwh_histories.items():
-                label = "Heizung" if kh.current.kind == ReadingKind.heating else "Warmwasser"
+            for cost_type, history in kwh_histories_by_cost_type.items():
+                kind = _kind_from_cost_type(cost_type)
+                label = "Heizung" if kind == ReadingKind.heating else "Warmwasser"
+                unit = history[-1].unit if history else None
                 import_series_as_sum(
                     self.hass,
                     statistic_id=f"{DOMAIN}:{uid}_kwh_total_{cost_type.lower()}",
-                    name=f"Brunata {uid} – {label} – Verbrauch (kumulativ, kWh)",
-                    unit=kh.current.unit,
-                    points=((r.timestamp, float(r.value)) for r in kh.history),
+                    name=f"Brunata {uid} – {label} – {cost_type} – Verbrauch (kumulativ, kWh)",
+                    unit=unit,
+                    points=((r.timestamp, float(r.value)) for r in history),
                 )
 
             return data

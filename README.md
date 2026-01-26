@@ -1,4 +1,4 @@
-## Brunata Home Assistant Integration (Custom Component)
+## Brunata Home Assistant Integration
 
 Diese Repository enthält eine **Home Assistant Custom Integration** für das Brunata Nutzerportal.
 
@@ -17,25 +17,31 @@ Diese Repository enthält eine **Home Assistant Custom Integration** für das Br
   - `<config>/custom_components/brunata/`
 - Starte Home Assistant neu.
 
+### Installation via HACS (Custom Repository)
+
+- Füge das Repository als **Custom repository** in HACS hinzu (Typ: **Integration**):
+  - `https://github.com/fjfricke/brunata`
+- Installiere anschließend **Brunata** und starte Home Assistant neu.
+
 ### Anmeldung / Konfiguration
 
 Du brauchst Zugangsdaten, die im Brunata-Portal funktionieren.
 Im Config-Flow kannst du u. a. **Base URL**, **SAP Client** und **Sprache** setzen (standardmäßig passend für das Münchner Portal).
 
+Über die Optionen kannst du das Aktualisierungsintervall ändern.
+
 ### Sensoren (Entities)
 
-- **Heizung – Monatsverbrauch (kWh)** (`sensor.*monthly_hz01`)
-- **Warmwasser – Monatsverbrauch (kWh)** (`sensor.*monthly_ww01`)
-- **Heizung – Zählerstand (Meter)** (aus `brunata meter`, Einheit z. B. *Einh.*)
-- **Warmwasser – Zählerstand (Meter)** (aus `brunata meter`, Einheit z. B. *m³*)
-- **Heizung – Verbrauch (kumulativ, kWh)** (aus `brunata current`, als `total_increasing`)
-- **Warmwasser – Verbrauch (kumulativ, kWh)** (aus `brunata current`, als `total_increasing`)
+- Pro `CostType` (z. B. `HZ01`, `HZ02`, `WW01` …) werden eigene Sensoren erzeugt:
+  - **Monatsverbrauch (kWh)** (`sensor.*monthly_<cost_type>`)
+  - **Zählerstand (Meter)** (`sensor.*meter_<cost_type>`, Einheit z. B. *Einh.* oder *m³*)
+  - **Verbrauch (kumulativ, kWh)** (`sensor.*kwh_total_<cost_type>`, `total_increasing`)
 - **Dashboard-Perioden** (Diagnose)
 
 ### Historie / Recorder (wichtig)
 
 - Die **kWh kumulativ** Sensoren werden zusätzlich als **Long-term statistics** in den Recorder geschrieben.
-- Beim ersten Lauf wird die kWh-Historie aus den Monatswerten rückwärts rekonstruiert (Backtracking).
+- Die kumulative kWh-Historie wird aus den Monatswerten als kumulative Summe aufgebaut und importiert.
 
 ### Sicherheit & Datenschutz
 

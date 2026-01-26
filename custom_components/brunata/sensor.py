@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from brunata_api import ReadingKind
 from brunata_api.models import MeterReading, Reading
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
@@ -54,55 +53,12 @@ class _SensorDef:
     entity_category: EntityCategory | None = None
 
 
-SENSORS: tuple[_SensorDef, ...] = (
-    _SensorDef(
-        key="monthly_hz01",
-        name="Heizung – Monatsverbrauch (kWh)",
-        kind="monthly_hz01",
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL,
-    ),
-    _SensorDef(
-        key="monthly_ww01",
-        name="Warmwasser – Monatsverbrauch (kWh)",
-        kind="monthly_ww01",
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL,
-    ),
-    _SensorDef(
-        key="meter_hz",
-        name="Heizung – Zählerstand (Meter)",
-        kind="meter_hz",
-        state_class=SensorStateClass.TOTAL_INCREASING,
-    ),
-    _SensorDef(
-        key="meter_ww",
-        name="Warmwasser – Zählerstand (Meter)",
-        kind="meter_ww",
-        device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-    ),
-    _SensorDef(
-        key="kwh_total_hz",
-        name="Heizung – Verbrauch (kumulativ, kWh)",
-        kind="kwh_total_hz",
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-    ),
-    _SensorDef(
-        key="kwh_total_ww",
-        name="Warmwasser – Verbrauch (kumulativ, kWh)",
-        kind="kwh_total_ww",
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-    ),
-    _SensorDef(
-        key="dashboard_dates",
-        name="Dashboard-Perioden",
-        kind="dashboard_dates",
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-)
+def _label_for_cost_type(cost_type: str) -> str:
+    if cost_type.startswith("HZ"):
+        return "Heizung"
+    if cost_type.startswith("WW"):
+        return "Warmwasser"
+    return cost_type
 
 
 async def async_setup_entry(
@@ -111,7 +67,82 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: BrunataDataCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(BrunataSensor(coordinator, entry, d) for d in SENSORS)
+    data = coordinator.data or {}
+
+    meter_by_cost_type: dict[str, MeterReading] = dict(data.get("meter_readings_by_cost_type") or {})
+    monthly_by_cost_type: dict[str, list[Reading]] = dict(data.get("monthly_by_cost_type") or {})
+    kwh_histories_by_cost_type: dict[str, list[MeterReading]] = dict(
+        data.get("kwh_histories_by_cost_type") or {}
+    )
+
+    cost_types = sorted({*meter_by_cost_type.keys(), *monthly_by_cost_type.keys()})
+
+    entities: list[BrunataSensor] = []
+
+    # Always keep a diagnostics entity for dashboard periods.
+    entities.append(
+        BrunataSensor(
+            coordinator,
+            entry,
+            _SensorDef(
+                key="dashboard_dates",
+                name="Dashboard-Perioden",
+                kind="dashboard_dates",
+                entity_category=EntityCategory.DIAGNOSTIC,
+            ),
+        )
+    )
+
+    for cost_type in cost_types:
+        label = _label_for_cost_type(cost_type)
+
+        if monthly_by_cost_type.get(cost_type):
+            entities.append(
+                BrunataSensor(
+                    coordinator,
+                    entry,
+                    _SensorDef(
+                        key=f"monthly_{cost_type.lower()}",
+                        name=f"{label} – {cost_type} – Monatsverbrauch (kWh)",
+                        kind=f"monthly:{cost_type}",
+                        device_class=SensorDeviceClass.ENERGY,
+                        state_class=SensorStateClass.TOTAL,
+                    ),
+                )
+            )
+
+        if meter_by_cost_type.get(cost_type):
+            device_class = SensorDeviceClass.WATER if cost_type.startswith("WW") else None
+            entities.append(
+                BrunataSensor(
+                    coordinator,
+                    entry,
+                    _SensorDef(
+                        key=f"meter_{cost_type.lower()}",
+                        name=f"{label} – {cost_type} – Zählerstand (Meter)",
+                        kind=f"meter:{cost_type}",
+                        device_class=device_class,
+                        state_class=SensorStateClass.TOTAL_INCREASING,
+                    ),
+                )
+            )
+
+        if kwh_histories_by_cost_type.get(cost_type) or monthly_by_cost_type.get(cost_type):
+            entities.append(
+                BrunataSensor(
+                    coordinator,
+                    entry,
+                    _SensorDef(
+                        key=f"kwh_total_{cost_type.lower()}",
+                        name=f"{label} – {cost_type} – Verbrauch (kumulativ, kWh)",
+                        kind=f"kwh_total:{cost_type}",
+                        device_class=SensorDeviceClass.ENERGY,
+                        state_class=SensorStateClass.TOTAL_INCREASING,
+                    ),
+                )
+            )
+
+    async_add_entities(entities)
 
 
 class BrunataSensor(CoordinatorEntity[BrunataDataCoordinator], SensorEntity):
@@ -166,7 +197,7 @@ class BrunataSensor(CoordinatorEntity[BrunataDataCoordinator], SensorEntity):
         For monthly consumption we expose the month-total as a 'total' sensor which resets
         at the beginning of each month.
         """
-        if self._def.kind not in ("monthly_hz01", "monthly_ww01"):
+        if not self._def.kind.startswith("monthly:"):
             return None
         latest = _latest(self._get_readings())
         if not isinstance(latest, Reading):
@@ -191,22 +222,24 @@ class BrunataSensor(CoordinatorEntity[BrunataDataCoordinator], SensorEntity):
     def _get_readings(self) -> list[ReadingLike]:
         data = self.coordinator.data or {}
 
-        if self._def.kind == "monthly_hz01":
-            return list(data.get("monthly_hz01") or [])
-        if self._def.kind == "monthly_ww01":
-            return list(data.get("monthly_ww01") or [])
-        if self._def.kind == "meter_hz":
-            readings: list[MeterReading] = list(data.get("meter_readings") or [])
-            return [r for r in readings if r.kind == ReadingKind.heating]
-        if self._def.kind == "meter_ww":
-            readings = list(data.get("meter_readings") or [])
-            return [r for r in readings if r.kind == ReadingKind.hot_water]
-        if self._def.kind == "kwh_total_hz":
-            readings: list[MeterReading] = list(data.get("kwh_meter_readings") or [])
-            return [r for r in readings if r.kind == ReadingKind.heating]
-        if self._def.kind == "kwh_total_ww":
-            readings = list(data.get("kwh_meter_readings") or [])
-            return [r for r in readings if r.kind == ReadingKind.hot_water]
+        if self._def.kind.startswith("monthly:"):
+            _, cost_type = self._def.kind.split(":", 1)
+            monthly_by_cost_type: dict[str, list[Reading]] = dict(data.get("monthly_by_cost_type") or {})
+            return list(monthly_by_cost_type.get(cost_type) or [])
+
+        if self._def.kind.startswith("meter:"):
+            _, cost_type = self._def.kind.split(":", 1)
+            meter_by_cost_type: dict[str, MeterReading] = dict(data.get("meter_readings_by_cost_type") or {})
+            r = meter_by_cost_type.get(cost_type)
+            return [r] if r else []
+
+        if self._def.kind.startswith("kwh_total:"):
+            _, cost_type = self._def.kind.split(":", 1)
+            histories_by_cost_type: dict[str, list[MeterReading]] = dict(
+                data.get("kwh_histories_by_cost_type") or {}
+            )
+            return list(histories_by_cost_type.get(cost_type) or [])
+
         return []
 
 
