@@ -120,24 +120,38 @@ class BrunataDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             dashboard_dates_task = client.get_dashboard_dates()
             meter_readings_task = client.get_meter_readings()
-            monthly_heating_task = client.get_monthly_consumptions(ReadingKind.heating, in_kwh=True)
-            monthly_hot_water_task = client.get_monthly_consumptions(ReadingKind.hot_water, in_kwh=True)
+            periods_task = client.get_periods()
 
             (
                 dashboard_dates,
                 meter_readings_by_cost_type,
-                monthly_heating_by_cost_type,
-                monthly_hot_water_by_cost_type,
+                periods,
             ) = await asyncio.gather(
                 dashboard_dates_task,
                 meter_readings_task,
-                monthly_heating_task,
-                monthly_hot_water_task,
+                periods_task,
             )
 
+            # Fetch monthly consumption for all periods and merge per cost_type so the
+            # cumulative series spans all years (avoids Energy dashboard "reset" at new year).
             monthly_by_cost_type: dict[str, list[Reading]] = {}
-            monthly_by_cost_type.update(monthly_heating_by_cost_type or {})
-            monthly_by_cost_type.update(monthly_hot_water_by_cost_type or {})
+            for i in range(len(periods)):
+                heating_i, hot_water_i = await asyncio.gather(
+                    client.get_monthly_consumptions(
+                        ReadingKind.heating, in_kwh=True, period_index=i
+                    ),
+                    client.get_monthly_consumptions(
+                        ReadingKind.hot_water, in_kwh=True, period_index=i
+                    ),
+                )
+                for ct, readings in (heating_i or {}).items():
+                    monthly_by_cost_type.setdefault(ct, []).extend(readings)
+                for ct, readings in (hot_water_i or {}).items():
+                    monthly_by_cost_type.setdefault(ct, []).extend(readings)
+            for ct in monthly_by_cost_type:
+                monthly_by_cost_type[ct] = sorted(
+                    monthly_by_cost_type[ct], key=lambda r: r.timestamp
+                )
 
             data: dict[str, Any] = {
                 "account": account,
