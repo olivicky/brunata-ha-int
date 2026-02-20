@@ -153,12 +153,23 @@ class BrunataDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     monthly_by_cost_type[ct], key=lambda r: r.timestamp
                 )
 
+            comparison_task = client.get_consumption_comparison()
+            forecast_task = client.get_consumption_forecast()
+            room_task = client.get_room_consumption()
+
+            comparison_by_cost_type, forecast_by_cost_type, room_by_cost_type = await asyncio.gather(
+                comparison_task, forecast_task, room_task
+            )
+
             data: dict[str, Any] = {
                 "account": account,
                 "dashboard_dates": dashboard_dates,
                 # New multi-cost-type model
                 "meter_readings_by_cost_type": meter_readings_by_cost_type or {},
                 "monthly_by_cost_type": monthly_by_cost_type,
+                "comparison_by_cost_type": comparison_by_cost_type or {},
+                "forecast_by_cost_type": forecast_by_cost_type or {},
+                "room_by_cost_type": room_by_cost_type or {},
             }
 
             kwh_histories_by_cost_type: dict[str, list[MeterReading]] = {}

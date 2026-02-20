@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from brunata_api.models import MeterReading, Reading
+from brunata_api.models import (
+    ConsumptionComparison,
+    ConsumptionForecast,
+    MeterReading,
+    Reading,
+    RoomConsumption,
+)
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -74,8 +80,23 @@ async def async_setup_entry(
     kwh_histories_by_cost_type: dict[str, list[MeterReading]] = dict(
         data.get("kwh_histories_by_cost_type") or {}
     )
+    comparison_by_cost_type: dict[str, ConsumptionComparison] = dict(
+        data.get("comparison_by_cost_type") or {}
+    )
+    forecast_by_cost_type: dict[str, ConsumptionForecast] = dict(
+        data.get("forecast_by_cost_type") or {}
+    )
+    room_by_cost_type: dict[str, list[RoomConsumption]] = dict(
+        data.get("room_by_cost_type") or {}
+    )
 
-    cost_types = sorted({*meter_by_cost_type.keys(), *monthly_by_cost_type.keys()})
+    cost_types = sorted({
+        *meter_by_cost_type.keys(),
+        *monthly_by_cost_type.keys(),
+        *comparison_by_cost_type.keys(),
+        *forecast_by_cost_type.keys(),
+        *room_by_cost_type.keys(),
+    })
 
     entities: list[BrunataSensor] = []
 
@@ -142,6 +163,115 @@ async def async_setup_entry(
                 )
             )
 
+        if comparison_by_cost_type.get(cost_type):
+            entities.append(
+                BrunataSensor(
+                    coordinator,
+                    entry,
+                    _SensorDef(
+                        key=f"comparison_your_value_{cost_type.lower()}",
+                        name=f"{label} – {cost_type} – Verbrauch (kWh/m²)",
+                        kind=f"comparison_your:{cost_type}",
+                        state_class=SensorStateClass.MEASUREMENT,
+                    ),
+                )
+            )
+            entities.append(
+                BrunataSensor(
+                    coordinator,
+                    entry,
+                    _SensorDef(
+                        key=f"comparison_building_avg_{cost_type.lower()}",
+                        name=f"{label} – {cost_type} – Gebäudedurchschnitt",
+                        kind=f"comparison_building:{cost_type}",
+                        state_class=SensorStateClass.MEASUREMENT,
+                    ),
+                )
+            )
+            entities.append(
+                BrunataSensor(
+                    coordinator,
+                    entry,
+                    _SensorDef(
+                        key=f"comparison_national_avg_{cost_type.lower()}",
+                        name=f"{label} – {cost_type} – Bundesdurchschnitt",
+                        kind=f"comparison_national:{cost_type}",
+                        state_class=SensorStateClass.MEASUREMENT,
+                    ),
+                )
+            )
+
+        if forecast_by_cost_type.get(cost_type):
+            entities.append(
+                BrunataSensor(
+                    coordinator,
+                    entry,
+                    _SensorDef(
+                        key=f"forecast_current_{cost_type.lower()}",
+                        name=f"{label} – {cost_type} – Aktuell (YTD)",
+                        kind=f"forecast_current:{cost_type}",
+                        device_class=SensorDeviceClass.ENERGY,
+                        state_class=SensorStateClass.TOTAL,
+                    ),
+                )
+            )
+            entities.append(
+                BrunataSensor(
+                    coordinator,
+                    entry,
+                    _SensorDef(
+                        key=f"forecast_previous_year_{cost_type.lower()}",
+                        name=f"{label} – {cost_type} – Vorjahr",
+                        kind=f"forecast_previous:{cost_type}",
+                        device_class=SensorDeviceClass.ENERGY,
+                        state_class=SensorStateClass.MEASUREMENT,
+                    ),
+                )
+            )
+            entities.append(
+                BrunataSensor(
+                    coordinator,
+                    entry,
+                    _SensorDef(
+                        key=f"forecast_forecast_{cost_type.lower()}",
+                        name=f"{label} – {cost_type} – Prognose",
+                        kind=f"forecast_forecast:{cost_type}",
+                        device_class=SensorDeviceClass.ENERGY,
+                        state_class=SensorStateClass.MEASUREMENT,
+                    ),
+                )
+            )
+            entities.append(
+                BrunataSensor(
+                    coordinator,
+                    entry,
+                    _SensorDef(
+                        key=f"forecast_difference_{cost_type.lower()}",
+                        name=f"{label} – {cost_type} – Mehrverbrauch",
+                        kind=f"forecast_difference:{cost_type}",
+                        device_class=SensorDeviceClass.ENERGY,
+                        state_class=SensorStateClass.MEASUREMENT,
+                    ),
+                )
+            )
+
+        for room in room_by_cost_type.get(cost_type) or []:
+            room_id = (room.room_id or "").strip() or "unknown"
+            room_name = (room.room_name or "").strip() or room_id
+            safe_key = room_id.replace(" ", "_").lower()
+            entities.append(
+                BrunataSensor(
+                    coordinator,
+                    entry,
+                    _SensorDef(
+                        key=f"room_{safe_key}_{cost_type.lower()}",
+                        name=f"Raum: {room_name} – {cost_type}",
+                        kind=f"room:{cost_type}:{room_id}",
+                        state_class=SensorStateClass.MEASUREMENT,
+                    ),
+                )
+            )
+
     async_add_entities(entities)
 
 
@@ -177,6 +307,10 @@ class BrunataSensor(CoordinatorEntity[BrunataDataCoordinator], SensorEntity):
         if self._def.kind == "dashboard_dates":
             return None
 
+        unit = self._unit_for_extra_kinds()
+        if unit is not None:
+            return unit
+
         readings = self._get_readings()
         r = _latest(readings)
         return r.unit if r else None
@@ -187,28 +321,35 @@ class BrunataSensor(CoordinatorEntity[BrunataDataCoordinator], SensorEntity):
             periods = _extract_periods(self.coordinator.data.get("dashboard_dates"))
             return len(periods)
 
+        val = self._value_for_extra_kinds()
+        if val is not None:
+            return val
+
         r = _latest(self._get_readings())
         return r.value if r else None
 
     @property
     def last_reset(self) -> datetime | None:
-        """Return last_reset for period totals (monthly consumption).
-
-        For monthly consumption we expose the month-total as a 'total' sensor which resets
-        at the beginning of each month.
-        """
-        if not self._def.kind.startswith("monthly:"):
-            return None
-        latest = _latest(self._get_readings())
-        if not isinstance(latest, Reading):
-            return None
-        ts = dt_util.as_utc(latest.timestamp)
-        return ts.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        """Return last_reset for period totals (monthly consumption, forecast current YTD)."""
+        if self._def.kind.startswith("monthly:"):
+            latest = _latest(self._get_readings())
+            if not isinstance(latest, Reading):
+                return None
+            ts = dt_util.as_utc(latest.timestamp)
+            return ts.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if self._def.kind.startswith("forecast_current:"):
+            now = dt_util.now()
+            return now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         if self._def.kind == "dashboard_dates":
             return {"periods": _extract_periods(self.coordinator.data.get("dashboard_dates"))}
+
+        attrs_extra = self._attrs_for_extra_kinds()
+        if attrs_extra is not None:
+            return attrs_extra
 
         readings = self._get_readings()
         attrs: dict[str, Any] = _reading_attrs(readings)
@@ -218,6 +359,81 @@ class BrunataSensor(CoordinatorEntity[BrunataDataCoordinator], SensorEntity):
             if isinstance(latest, MeterReading):
                 attrs["cost_type"] = latest.cost_type
         return attrs
+
+    def _value_for_extra_kinds(self) -> float | None:
+        """Return native_value for comparison/forecast/room kinds, or None."""
+        data = self.coordinator.data or {}
+        if self._def.kind.startswith("comparison_"):
+            sub, cost_type = self._def.kind.split(":", 1)
+            comp: ConsumptionComparison | None = (data.get("comparison_by_cost_type") or {}).get(cost_type)
+            if not comp:
+                return None
+            if "your" in sub:
+                return comp.your_value
+            if "building" in sub:
+                return comp.building_average
+            if "national" in sub:
+                return comp.national_average
+            return None
+        if self._def.kind.startswith("forecast_"):
+            sub, cost_type = self._def.kind.split(":", 1)
+            fc: ConsumptionForecast | None = (data.get("forecast_by_cost_type") or {}).get(cost_type)
+            if not fc:
+                return None
+            if sub == "forecast_current":
+                return fc.current
+            if sub == "forecast_previous":
+                return fc.previous_year
+            if sub == "forecast_forecast":
+                return fc.forecast
+            if sub == "forecast_difference":
+                return fc.difference
+            return None
+        if self._def.kind.startswith("room:"):
+            _, cost_type, room_id = self._def.kind.split(":", 2)
+            rooms: list[RoomConsumption] = (data.get("room_by_cost_type") or {}).get(cost_type) or []
+            for r in rooms:
+                if (r.room_id or "").strip() == room_id:
+                    return r.value
+            return None
+        return None
+
+    def _unit_for_extra_kinds(self) -> str | None:
+        """Return native_unit for comparison/forecast/room kinds, or None."""
+        data = self.coordinator.data or {}
+        if self._def.kind.startswith("comparison_"):
+            _, cost_type = self._def.kind.split(":", 1)
+            comp: ConsumptionComparison | None = (data.get("comparison_by_cost_type") or {}).get(cost_type)
+            return (comp.unit if comp else None) or "kWh/m²"
+        if self._def.kind.startswith("forecast_"):
+            _, cost_type = self._def.kind.split(":", 1)
+            fc: ConsumptionForecast | None = (data.get("forecast_by_cost_type") or {}).get(cost_type)
+            return (fc.unit if fc else None) or "kWh"
+        if self._def.kind.startswith("room:"):
+            _, cost_type, room_id = self._def.kind.split(":", 2)
+            rooms: list[RoomConsumption] = (data.get("room_by_cost_type") or {}).get(cost_type) or []
+            for r in rooms:
+                if (r.room_id or "").strip() == room_id:
+                    return r.unit
+            return None
+        return None
+
+    def _attrs_for_extra_kinds(self) -> dict[str, Any] | None:
+        """Return extra_state_attributes for comparison/forecast/room kinds, or None."""
+        if self._def.kind.startswith("room:"):
+            data = self.coordinator.data or {}
+            _, cost_type, room_id = self._def.kind.split(":", 2)
+            rooms: list[RoomConsumption] = (data.get("room_by_cost_type") or {}).get(cost_type) or []
+            for r in rooms:
+                if (r.room_id or "").strip() == room_id:
+                    return {
+                        "room_id": r.room_id,
+                        "room_name": r.room_name,
+                        "share_percent": r.share_percent,
+                        "cost_type": r.cost_type,
+                    }
+            return {}
+        return None
 
     def _get_readings(self) -> list[ReadingLike]:
         data = self.coordinator.data or {}
