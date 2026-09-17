@@ -1,4 +1,4 @@
-## Brunata Home Assistant Integration
+## Brunata Home Assistant Integration v2
 
 This repository contains a **Home Assistant custom integration** for the Brunata user portal.
 

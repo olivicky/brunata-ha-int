@@ -62,9 +62,12 @@ class _SensorDef:
 def _label_for_cost_type(cost_type: str) -> str:
     if cost_type.startswith("HZ"):
         return "Heizung"
-    if cost_type.startswith("WW"):
+    elif cost_type.startswith("WW"):
         return "Warmwasser"
+    elif cost_type.startswith("KW"):
+        return "KaltWasser"
     return cost_type
+    
 
 
 async def async_setup_entry(
@@ -133,7 +136,11 @@ async def async_setup_entry(
             )
 
         if meter_by_cost_type.get(cost_type):
-            device_class = SensorDeviceClass.WATER if cost_type.startswith("WW") else None
+            if cost_type.startswith("WW") or cost_type.startswith("KW"):
+                device_class = SensorDeviceClass.WATER
+            else: 
+                device_class = None
+            
             entities.append(
                 BrunataSensor(
                     coordinator,
