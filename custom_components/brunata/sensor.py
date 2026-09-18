@@ -119,6 +119,9 @@ async def async_setup_entry(
 
     for cost_type in cost_types:
         label = _label_for_cost_type(cost_type)
+        is_water = cost_type.startswith(("WW", "KW"))
+        consumption_unit = "m³" if is_water else "kWh"
+        consumption_device_class = SensorDeviceClass.WATER if is_water else SensorDeviceClass.ENERGY
 
         if monthly_by_cost_type.get(cost_type):
             entities.append(
@@ -127,9 +130,9 @@ async def async_setup_entry(
                     entry,
                     _SensorDef(
                         key=f"monthly_{cost_type.lower()}",
-                        name=f"{label} – {cost_type} – Monatsverbrauch (kWh)",
+                        name=f"{label} – {cost_type} – Monatsverbrauch ({consumption_unit})",
                         kind=f"monthly:{cost_type}",
-                        device_class=SensorDeviceClass.ENERGY,
+                        device_class=consumption_device_class,
                         state_class=SensorStateClass.TOTAL,
                     ),
                 )
@@ -162,9 +165,9 @@ async def async_setup_entry(
                     entry,
                     _SensorDef(
                         key=f"kwh_total_{cost_type.lower()}",
-                        name=f"{label} – {cost_type} – Verbrauch (kumulativ, kWh)",
+                        name=f"{label} – {cost_type} – Verbrauch (kumulativ, {consumption_unit})",
                         kind=f"kwh_total:{cost_type}",
-                        device_class=SensorDeviceClass.ENERGY,
+                        device_class=consumption_device_class,
                         state_class=SensorStateClass.TOTAL_INCREASING,
                     ),
                 )

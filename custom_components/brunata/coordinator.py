@@ -30,6 +30,8 @@ def _kind_from_cost_type(cost_type: str) -> ReadingKind:
         return ReadingKind.heating
     if cost_type.startswith("WW"):
         return ReadingKind.hot_water
+    if cost_type.startswith("KW"):
+        return ReadingKind.cold_water
     # Fallback: heating
     return ReadingKind.heating
 
@@ -37,11 +39,12 @@ def _kind_from_cost_type(cost_type: str) -> ReadingKind:
 def _cumulative_kwh_history(
     *, cost_type: str, monthly: list[Reading]
 ) -> tuple[ReadingKind, str | None, list[MeterReading]]:
-    """Build a cumulative (sum) kWh series from monthly kWh readings."""
+    """Build a cumulative series from monthly consumption readings."""
     kind = _kind_from_cost_type(cost_type)
     monthly_sorted = sorted(monthly, key=lambda r: r.timestamp)
-    unit = monthly_sorted[-1].unit if monthly_sorted else "kWh"
-    unit = unit or "kWh"
+    default_unit = "m³" if kind in (ReadingKind.hot_water, ReadingKind.cold_water) else "kWh"
+    unit = monthly_sorted[-1].unit if monthly_sorted else default_unit
+    unit = unit or default_unit
 
     total = 0.0
     history: list[MeterReading] = []
@@ -136,17 +139,22 @@ class BrunataDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # cumulative series spans all years (avoids Energy dashboard "reset" at new year).
             monthly_by_cost_type: dict[str, list[Reading]] = {}
             for i in range(len(periods)):
-                heating_i, hot_water_i = await asyncio.gather(
+                heating_i, hot_water_i, cold_water_i = await asyncio.gather(
                     client.get_monthly_consumptions(
                         ReadingKind.heating, in_kwh=True, period_index=i
                     ),
                     client.get_monthly_consumptions(
-                        ReadingKind.hot_water, in_kwh=True, period_index=i
+                        ReadingKind.hot_water, in_kwh=False, period_index=i
+                    ),
+                    client.get_monthly_consumptions(
+                        ReadingKind.cold_water, in_kwh=False, period_index=i
                     ),
                 )
                 for ct, readings in (heating_i or {}).items():
                     monthly_by_cost_type.setdefault(ct, []).extend(readings)
                 for ct, readings in (hot_water_i or {}).items():
+                    monthly_by_cost_type.setdefault(ct, []).extend(readings)
+                for ct, readings in (cold_water_i or {}).items():
                     monthly_by_cost_type.setdefault(ct, []).extend(readings)
             for ct in monthly_by_cost_type:
                 monthly_by_cost_type[ct] = sorted(
@@ -200,6 +208,8 @@ class BrunataDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         and (
                             "_meter_" in i.get("statistic_id", "")
                             or "_monthly_" in i.get("statistic_id", "")
+                            or "_kwh_total_ww" in i.get("statistic_id", "")
+                            or "_kwh_total_kw" in i.get("statistic_id", "")
                         )
                     ]
                     if obsolete:
@@ -207,15 +217,20 @@ class BrunataDataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.debug("Failed to clear obsolete statistics: %s", err)
 
-            # Backfill ONLY the synthetic cumulative kWh series (not the physical meters).
+            # Backfill only the synthetic cumulative series, not the physical meters.
             for cost_type, history in kwh_histories_by_cost_type.items():
                 kind = _kind_from_cost_type(cost_type)
-                label = "Heizung" if kind == ReadingKind.heating else "Warmwasser"
+                label = {
+                    ReadingKind.heating: "Heizung",
+                    ReadingKind.hot_water: "Warmwasser",
+                    ReadingKind.cold_water: "KaltWasser",
+                }.get(kind, cost_type)
                 unit = history[-1].unit if history else None
+                unit_label = "m³" if kind in (ReadingKind.hot_water, ReadingKind.cold_water) else "kWh"
                 import_series_as_sum(
                     self.hass,
                     statistic_id=f"{DOMAIN}:{uid}_kwh_total_{cost_type.lower()}",
-                    name=f"Brunata {uid} – {label} – {cost_type} – Verbrauch (kumulativ, kWh)",
+                    name=f"Brunata {uid} – {label} – {cost_type} – Verbrauch (kumulativ, {unit_label})",
                     unit=unit,
                     points=((r.timestamp, float(r.value)) for r in history),
                 )
